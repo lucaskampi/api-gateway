@@ -1,0 +1,47 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout_ms: 5000
+  write_timeout_ms: 5000
+
+jwt:
+  secret: "your-secret-key-change-in-production"
+  issuer: "api-gateway"
+
+otel:
+  endpoint: "jaeger:4318"
+  service_name: "api-gateway"
+
+routes:
+  - path: "/api/users/*"
+    upstream: "http://localhost:8081"
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    strip_prefix: "/api/users"
+    auth_required: true
+    rate_limit:
+      rps: 100
+      burst: 150
+    timeout_ms: 5000
+    retry:
+      attempts: 3
+      backoff_ms: 100
+
+  - path: "/api/orders/*"
+    upstream: "http://localhost:8081"
+    methods: ["GET", "POST"]
+    strip_prefix: "/api/orders"
+    auth_required: true
+    rate_limit:
+      rps: 50
+      burst: 75
+    timeout_ms: 3000
+
+  - path: "/api/public/*"
+    upstream: "http://localhost:8081"
+    methods: ["GET", "POST"]
+    strip_prefix: "/api/public"
+    auth_required: false
+    rate_limit:
+      rps: 200
+      burst: 250
+    timeout_ms: 5000

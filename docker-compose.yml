@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+    depends_on:
+      - echo-service
+      - jaeger
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+
+  echo-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.echo
+    ports:
+      - "8081:8081"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
