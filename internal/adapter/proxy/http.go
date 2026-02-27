@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -47,7 +48,7 @@ func NewHTTPClient(opts Options) *HTTPClient {
 func (c *HTTPClient) Do(ctx context.Context, req *proxy.Request) (*proxy.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, req.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	for key, values := range req.Header {
@@ -58,13 +59,13 @@ func (c *HTTPClient) Do(ctx context.Context, req *proxy.Request) (*proxy.Respons
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	resp := &proxy.Response{
