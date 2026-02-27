@@ -1,6 +1,8 @@
 package router
 
 import (
+	"time"
+
 	"api-gateway/internal/adapter/proxy"
 	"api-gateway/internal/domain/config"
 	"api-gateway/internal/handler"
@@ -38,6 +40,9 @@ func New(app *fiber.App, cfg *config.Config, logger zerolog.Logger) *Router {
 func (r *Router) Setup() {
 	r.app.Get("/health", handler.Health())
 	r.app.Get("/ready", handler.Ready())
+	r.app.Get("/metrics", handler.Metrics())
+	r.app.Get("/docs", handler.SwaggerUI())
+	r.app.Get("/openapi.json", handler.OpenAPI())
 
 	r.setupRoutes()
 }
@@ -84,6 +89,7 @@ func (r *Router) buildMiddlewareList(route *config.Route) []fiber.Handler {
 
 	handlers = append(handlers, middleware.RequestID())
 	handlers = append(handlers, middleware.Logger(r.logger))
+	handlers = append(handlers, middleware.Metrics())
 	handlers = append(handlers, middleware.CORS(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 	}))
@@ -104,6 +110,11 @@ func (r *Router) buildMiddlewareList(route *config.Route) []fiber.Handler {
 	handlers = append(handlers, middleware.Timeout(route.Timeout()))
 
 	if route.Retry != nil && route.Retry.Attempts > 0 {
+		handlers = append(handlers, middleware.Retry(middleware.RetryConfig{
+			Attempts:   route.Retry.Attempts,
+			Backoff:    route.Retry.Backoff(),
+			MaxBackoff: 5 * time.Second,
+		}))
 		handlers = append(handlers, middleware.CircuitBreakerMiddleware(route.Retry.Attempts, route.Retry.Backoff()))
 	}
 

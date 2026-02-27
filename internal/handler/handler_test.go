@@ -31,7 +31,15 @@ func TestReady(t *testing.T) {
 }
 
 func TestOpenAPI(t *testing.T) {
-	t.Skip("Skipping - requires openapi.json in working directory")
+	app := fiber.New()
+	app.Get("/openapi.json", OpenAPI())
+
+	req := httptest.NewRequest("GET", "/openapi.json", nil)
+	resp, err := app.Test(req)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 }
 
 func TestSwaggerUI(t *testing.T) {
