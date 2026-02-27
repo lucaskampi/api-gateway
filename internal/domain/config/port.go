@@ -76,5 +76,5 @@ type ConfigLoader interface {
 	Load(ctx context.Context, path string) (*Config, error)
 	Watch(callback func(*Config))
 	Get() *Config
-	Reload() error
+	Reload() *Config
 }
