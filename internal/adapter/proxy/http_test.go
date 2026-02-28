@@ -2,7 +2,15 @@ package proxy
 
 import (
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"api-gateway/internal/middleware"
+
+	"github.com/gofiber/fiber/v3"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -113,6 +121,86 @@ func TestHTTPClient_Close(t *testing.T) {
 
 	err := client.Close()
 	assert.NoError(t, err)
+}
+
+func TestForward_RetryThenSuccess(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := calls.Add(1)
+		if current == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("temporary"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+
+	app := fiber.New()
+	client := NewHTTPClient(Options{
+		DialTimeout:         1 * time.Second,
+		ReadTimeout:         1 * time.Second,
+		WriteTimeout:        1 * time.Second,
+		IdleConnTimeout:     10 * time.Second,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+	})
+
+	app.Use(middleware.Retry(middleware.RetryConfig{
+		Attempts:   1,
+		Backoff:    1 * time.Millisecond,
+		MaxBackoff: 10 * time.Millisecond,
+	}))
+	app.Get("/proxy", client.Forward(struct {
+		Upstream    string
+		StripPrefix string
+		Headers     map[string]string
+	}{
+		Upstream:    upstream.URL,
+		StripPrefix: "",
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy", nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.GreaterOrEqual(t, calls.Load(), int32(2))
+}
+
+func TestForward_Timeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("slow"))
+	}))
+	defer upstream.Close()
+
+	app := fiber.New()
+	client := NewHTTPClient(Options{
+		DialTimeout:         1 * time.Second,
+		ReadTimeout:         1 * time.Second,
+		WriteTimeout:        1 * time.Second,
+		IdleConnTimeout:     10 * time.Second,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 10,
+	})
+
+	app.Use(middleware.Timeout(10 * time.Millisecond))
+	app.Get("/proxy", client.Forward(struct {
+		Upstream    string
+		StripPrefix string
+		Headers     map[string]string
+	}{
+		Upstream:    upstream.URL,
+		StripPrefix: "",
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/proxy", nil)
+	resp, err := app.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 }
 
 var _ = io.Discard
