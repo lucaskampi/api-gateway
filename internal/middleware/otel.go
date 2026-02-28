@@ -56,8 +56,12 @@ func InitOTel(endpoint, serviceName string) error {
 }
 
 func OTel() fiber.Handler {
-	tr := otel.Tracer(tracerName)
 	return func(c fiber.Ctx) error {
+		if tracer == nil || propagator == nil {
+			return c.Next()
+		}
+
+		tr := otel.Tracer(tracerName)
 		startTime := time.Now()
 		ctx := c.Context()
 

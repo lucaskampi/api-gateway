@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,6 +24,8 @@ type Server struct {
 	logger zerolog.Logger
 }
 
+var ErrReloadRequested = errors.New("reload requested")
+
 func New(cfg *config.Config, logger zerolog.Logger) *Server {
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  cfg.Server.ReadTimeout(),
@@ -40,7 +43,7 @@ func New(cfg *config.Config, logger zerolog.Logger) *Server {
 	}
 }
 
-func (s *Server) Start() error {
+func (s *Server) Start(reloadCh <-chan struct{}) error {
 	if s.cfg.OTel.Endpoint != "" {
 		if err := middleware.InitOTel(s.cfg.OTel.Endpoint, s.cfg.OTel.ServiceName); err != nil {
 			s.logger.Warn().Err(err).Msg("failed to initialize OTel")
@@ -59,16 +62,30 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	return s.gracefulShutdown()
-}
-
-func (s *Server) gracefulShutdown() error {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	defer signal.Stop(quit)
 
-	s.logger.Info().Msg("shutting down server...")
+	if reloadCh == nil {
+		<-quit
+		s.logger.Info().Msg("shutting down server...")
+		return s.shutdownApp()
+	}
 
+	select {
+	case <-quit:
+		s.logger.Info().Msg("shutting down server...")
+		return s.shutdownApp()
+	case <-reloadCh:
+		s.logger.Info().Msg("config reload requested, restarting server...")
+		if err := s.shutdownApp(); err != nil {
+			return err
+		}
+		return ErrReloadRequested
+	}
+}
+
+func (s *Server) shutdownApp() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

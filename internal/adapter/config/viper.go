@@ -33,6 +33,14 @@ func (v *ViperLoader) Load(ctx context.Context, path string) (*config.Config, er
 	viper.SetDefault("server.read_timeout_ms", 5000)
 	viper.SetDefault("server.write_timeout_ms", 5000)
 	viper.SetDefault("server.idle_timeout_ms", 60000)
+	viper.SetDefault("cors.allow_origins", []string{"*"})
+	viper.SetDefault("cors.allow_methods", []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"})
+	viper.SetDefault("cors.allow_headers", []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID"})
+	viper.SetDefault("cors.allow_credentials", false)
+	viper.SetDefault("cors.expose_headers", []string{})
+	viper.SetDefault("cors.max_age", 300)
+	viper.SetDefault("global_rate_limit.key_by", "global")
+	viper.SetDefault("routes.*.rate_limit.key_by", "ip")
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config: %w", err)
@@ -67,29 +75,14 @@ func (v *ViperLoader) setupWatcher() error {
 
 	v.watcher = watcher
 
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					v.Reload()
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				fmt.Printf("config watcher error: %v\n", err)
-			}
-		}
-	}()
-
 	return nil
 }
 
 func (v *ViperLoader) Watch(callback func(*config.Config)) {
+	if v.watcher == nil {
+		return
+	}
+
 	go func() {
 		for {
 			select {
@@ -103,6 +96,11 @@ func (v *ViperLoader) Watch(callback func(*config.Config)) {
 						callback(cfg)
 					}
 				}
+			case err, ok := <-v.watcher.Errors:
+				if !ok {
+					return
+				}
+				fmt.Printf("config watcher error: %v\n", err)
 			}
 		}
 	}()
