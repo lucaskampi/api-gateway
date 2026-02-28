@@ -29,7 +29,7 @@ This custom API Gateway was built to address these challenges while demonstratin
 ### Security
 - JWT token validation with claims extraction
 - Configurable CORS policies
-- Rate limiting (token bucket algorithm)
+- Rate limiting (global + per-route token bucket with `global`/`user`/`ip` key strategies)
 - Request ID propagation for tracing
 
 ### Resilience
@@ -45,7 +45,7 @@ This custom API Gateway was built to address these challenges while demonstratin
 - **Correlation**: X-Request-ID propagation across services
 
 ### Developer Experience
-- YAML-based configuration with hot reload
+- YAML-based configuration with hot reload (automatic in-process restart)
 - OpenAPI/Swagger documentation
 - Health and readiness endpoints
 - Docker and docker-compose support
@@ -118,12 +118,12 @@ make coverage
 │  3. Metrics (Prometheus) - Request counting & duration        │
 │  4. CORS - Cross-origin resource sharing                       │
 │  5. JWT Auth - Token validation & claims extraction             │
-│  6. Rate Limiting - Per-route token bucket                      │
+│  6. Rate Limiting - Global + per-route token bucket             │
 │  7. OpenTelemetry - Distributed tracing                         │
-│  8. Recovery - Panic handling                                    │
-│  9. Timeout - Per-route request timeout                         │
-│ 10. Retry - Retry with exponential backoff                     │
-│ 11. Circuit Breaker - Failure prevention                        │
+│  8. Timeout - Per-route request timeout                         │
+│  9. Recovery - Panic handling                                    │
+│ 10. Circuit Breaker - Failure prevention                        │
+│ 11. Retry - Retry with exponential backoff                     │
 │ 12. Proxy - Forward to upstream service                          │
 └──────────────┬──────────────────────────────────────────────────┘
                │
@@ -153,6 +153,11 @@ otel:
   endpoint: "jaeger:4318"
   service_name: "api-gateway"
 
+global_rate_limit:
+  rps: 1000
+  burst: 1200
+  key_by: "global"
+
 routes:
   - path: "/api/users/*"
     upstream: "http://users-service:8080"
@@ -162,6 +167,7 @@ routes:
     rate_limit:
       rps: 100
       burst: 150
+      key_by: "user"
     timeout_ms: 5000
     retry:
       attempts: 3
@@ -174,6 +180,7 @@ routes:
     rate_limit:
       rps: 200
       burst: 250
+      key_by: "ip"
     timeout_ms: 3000
 ```
 
@@ -188,6 +195,8 @@ routes:
 | `auth_required` | bool | Whether JWT validation is required |
 | `rate_limit.rps` | int | Requests per second |
 | `rate_limit.burst` | int | Burst capacity |
+| `rate_limit.key_by` | string | Rate-limit key strategy: `ip`, `user`, or `global` |
+| `global_rate_limit.*` | object | Optional global limiter (`rps`, `burst`, `key_by`) |
 | `timeout_ms` | int | Request timeout in milliseconds |
 | `retry.attempts` | int | Number of retry attempts |
 | `retry.backoff_ms` | int | Base backoff delay in milliseconds |

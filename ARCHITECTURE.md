@@ -32,12 +32,12 @@ This gateway provides:
 │  3. Metrics (Prometheus)                                │
 │  4. CORS                                               │
 │  5. JWT Auth (if required)                              │
-│  6. Rate Limiting (per-route token bucket)              │
+│  6. Rate Limiting (global + per-route token bucket)     │
 │  7. OpenTelemetry Tracing                              │
-│  8. Recovery (panic handler)                            │
-│  9. Timeout (per-route)                                │
-│ 10. Retry (with backoff)                               │
-│ 11. Circuit Breaker                                    │
+│  8. Timeout (per-route)                                │
+│  9. Recovery (panic handler)                            │
+│ 10. Circuit Breaker                                    │
+│ 11. Retry (with backoff)                               │
 │ 12. Proxy Forwarding                                   │
 └──────────────┬──────────────────────────────────────────┘
                │
@@ -57,12 +57,12 @@ The middleware chain order is critical:
 3. **Metrics** - Prometheus metrics collection
 4. **CORS** - Handle cross-origin requests
 5. **JWT Auth** - Validate tokens, extract claims (if auth_required)
-6. **Rate Limiting** - Per-route token bucket rate limiting
+6. **Rate Limiting** - Global limiter then per-route limiter (`global`/`user`/`ip` key strategies)
 7. **OpenTelemetry** - Trace instrumentation
-8. **Recovery** - Catch panics, return 500
-9. **Timeout** - Per-request timeout
-10. **Retry** - Retry with exponential backoff (if configured)
-11. **Circuit Breaker** - Prevent cascading failures
+8. **Timeout** - Per-request timeout
+9. **Recovery** - Catch panics, return 500
+10. **Circuit Breaker** - Prevent cascading failures
+11. **Retry** - Retry with exponential backoff (if configured)
 12. **Proxy** - Forward to upstream service
 
 ## Project Structure
@@ -114,6 +114,11 @@ otel:
   endpoint: "jaeger:4318"
   service_name: "api-gateway"
 
+global_rate_limit:
+  rps: 1000
+  burst: 1200
+  key_by: "global"
+
 routes:
   - path: "/api/users/*"
     upstream: "http://users-service:8080"
@@ -123,6 +128,7 @@ routes:
     rate_limit:
       rps: 100
       burst: 150
+      key_by: "user"
     timeout_ms: 5000
     retry:
       attempts: 3
@@ -139,8 +145,8 @@ routes:
 
 ### Rate Limiting
 - Token bucket algorithm
-- Per-route configuration
-- Per-IP limiting
+- Global and per-route configuration
+- Key strategy options: `global`, `user`, `ip`
 - Automatic cleanup of stale entries
 
 ### Resilience
