@@ -6,10 +6,27 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig `mapstructure:"server"`
-	JWT    JWTConfig    `mapstructure:"jwt"`
-	OTel   OTelConfig   `mapstructure:"otel"`
-	Routes []Route      `mapstructure:"routes"`
+	Server          ServerConfig           `mapstructure:"server"`
+	JWT             JWTConfig              `mapstructure:"jwt"`
+	OTel            OTelConfig             `mapstructure:"otel"`
+	CORS            CORSConfig             `mapstructure:"cors"`
+	GlobalRateLimit *GlobalRateLimitConfig `mapstructure:"global_rate_limit"`
+	Routes          []Route                `mapstructure:"routes"`
+}
+
+type GlobalRateLimitConfig struct {
+	RPS   int    `mapstructure:"rps"`
+	Burst int    `mapstructure:"burst"`
+	KeyBy string `mapstructure:"key_by"`
+}
+
+type CORSConfig struct {
+	AllowOrigins     []string `mapstructure:"allow_origins"`
+	AllowMethods     []string `mapstructure:"allow_methods"`
+	AllowHeaders     []string `mapstructure:"allow_headers"`
+	AllowCredentials bool     `mapstructure:"allow_credentials"`
+	ExposeHeaders    []string `mapstructure:"expose_headers"`
+	MaxAge           int      `mapstructure:"max_age"`
 }
 
 type ServerConfig struct {
@@ -59,8 +76,9 @@ func (r Route) Timeout() time.Duration {
 }
 
 type RateLimitConfig struct {
-	RPS   int `mapstructure:"rps"`
-	Burst int `mapstructure:"burst"`
+	RPS   int    `mapstructure:"rps"`
+	Burst int    `mapstructure:"burst"`
+	KeyBy string `mapstructure:"key_by"`
 }
 
 type RetryConfig struct {
