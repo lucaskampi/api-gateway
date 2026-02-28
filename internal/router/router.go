@@ -91,7 +91,12 @@ func (r *Router) buildMiddlewareList(route *config.Route) []fiber.Handler {
 	handlers = append(handlers, middleware.Logger(r.logger))
 	handlers = append(handlers, middleware.Metrics())
 	handlers = append(handlers, middleware.CORS(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
+		AllowOrigins:     r.cfg.CORS.AllowOrigins,
+		AllowMethods:     r.cfg.CORS.AllowMethods,
+		AllowHeaders:     r.cfg.CORS.AllowHeaders,
+		AllowCredentials: r.cfg.CORS.AllowCredentials,
+		ExposeHeaders:    r.cfg.CORS.ExposeHeaders,
+		MaxAge:           r.cfg.CORS.MaxAge,
 	}))
 
 	if route.AuthRequired {
@@ -101,21 +106,34 @@ func (r *Router) buildMiddlewareList(route *config.Route) []fiber.Handler {
 		}))
 	}
 
+	if r.cfg.GlobalRateLimit != nil {
+		handlers = append(handlers, middleware.RateLimitWithConfig(middleware.RateLimitConfig{
+			GlobalRPS:   r.cfg.GlobalRateLimit.RPS,
+			GlobalBurst: r.cfg.GlobalRateLimit.Burst,
+			GlobalKeyBy: r.cfg.GlobalRateLimit.KeyBy,
+		}))
+	}
+
 	if route.RateLimit != nil {
-		handlers = append(handlers, middleware.RateLimit(route.RateLimit.RPS, route.RateLimit.Burst))
+		handlers = append(handlers, middleware.RateLimitWithConfig(middleware.RateLimitConfig{
+			RouteID:    route.Path,
+			RouteRPS:   route.RateLimit.RPS,
+			RouteBurst: route.RateLimit.Burst,
+			RouteKeyBy: route.RateLimit.KeyBy,
+		}))
 	}
 
 	handlers = append(handlers, middleware.OTel())
-	handlers = append(handlers, middleware.Recovery(r.logger))
 	handlers = append(handlers, middleware.Timeout(route.Timeout()))
+	handlers = append(handlers, middleware.Recovery(r.logger))
 
 	if route.Retry != nil && route.Retry.Attempts > 0 {
+		handlers = append(handlers, middleware.CircuitBreakerMiddleware(route.Retry.Attempts, route.Retry.Backoff()))
 		handlers = append(handlers, middleware.Retry(middleware.RetryConfig{
 			Attempts:   route.Retry.Attempts,
 			Backoff:    route.Retry.Backoff(),
 			MaxBackoff: 5 * time.Second,
 		}))
-		handlers = append(handlers, middleware.CircuitBreakerMiddleware(route.Retry.Attempts, route.Retry.Backoff()))
 	}
 
 	routeCfg := routeConfig{

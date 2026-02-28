@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"os"
 
-	"api-gateway/internal/adapter/config"
+	adapterconfig "api-gateway/internal/adapter/config"
+	domainconfig "api-gateway/internal/domain/config"
 	"api-gateway/internal/server"
 
 	"github.com/rs/zerolog"
@@ -18,14 +20,35 @@ func main() {
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 	logger.Info().Str("config", *configPath).Msg("loading configuration")
 
-	loader := config.NewViperLoader()
-	cfg, err := loader.Load(context.Background(), *configPath)
+	loader := adapterconfig.NewViperLoader()
+	_, err := loader.Load(context.Background(), *configPath)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to load config")
 	}
 
-	srv := server.New(cfg, logger)
-	if err := srv.Start(); err != nil {
-		logger.Fatal().Err(err).Msg("server failed")
+	reloadCh := make(chan struct{}, 1)
+	loader.Watch(func(_ *domainconfig.Config) {
+		select {
+		case reloadCh <- struct{}{}:
+		default:
+		}
+	})
+
+	for {
+		cfg := loader.Get()
+		if cfg == nil {
+			logger.Fatal().Msg("configuration is not available")
+		}
+
+		srv := server.New(cfg, logger)
+		err = srv.Start(reloadCh)
+		if errors.Is(err, server.ErrReloadRequested) {
+			logger.Info().Msg("configuration reloaded")
+			continue
+		}
+		if err != nil {
+			logger.Fatal().Err(err).Msg("server failed")
+		}
+		break
 	}
 }

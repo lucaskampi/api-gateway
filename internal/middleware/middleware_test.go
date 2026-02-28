@@ -204,6 +204,30 @@ func TestCircuitBreaker_HalfOpenState(t *testing.T) {
 	t.Skip("Skipping due to Fiber v3 beta compatibility issues")
 }
 
+func TestCircuitBreakerMiddleware_BlocksAfterFailure(t *testing.T) {
+	resetGlobalBreaker()
+
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals("upstream", "http://upstream")
+		return c.Next()
+	})
+	app.Use(CircuitBreakerMiddleware(1, time.Second))
+	app.Get("/test", func(c fiber.Ctx) error {
+		return c.Status(fiber.StatusInternalServerError).SendString("upstream error")
+	})
+
+	firstReq := httptest.NewRequest("GET", "/test", nil)
+	firstResp, err := app.Test(firstReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 500, firstResp.StatusCode)
+
+	secondReq := httptest.NewRequest("GET", "/test", nil)
+	secondResp, err := app.Test(secondReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 503, secondResp.StatusCode)
+}
+
 func TestRateLimiter_AllowsWithinLimit(t *testing.T) {
 	rl := ratelimit.NewTokenBucket(10, 10)
 	ctx := context.Background()
@@ -244,6 +268,10 @@ func TestRateLimiter_RefillsOverTime(t *testing.T) {
 }
 
 func TestRateLimit_Middleware(t *testing.T) {
+	limitersMu.Lock()
+	limiters = make(map[string]*ratelimit.TokenBucket)
+	limitersMu.Unlock()
+
 	app := fiber.New()
 	app.Use(RateLimit(2, 2))
 	app.Get("/test", func(c fiber.Ctx) error {
@@ -261,6 +289,83 @@ func TestRateLimit_Middleware(t *testing.T) {
 	resp, err := app.Test(req)
 	assert.NoError(t, err)
 	assert.Equal(t, 429, resp.StatusCode)
+}
+
+func TestRateLimitWithConfig_GlobalLimit(t *testing.T) {
+	limitersMu.Lock()
+	limiters = make(map[string]*ratelimit.TokenBucket)
+	limitersMu.Unlock()
+
+	app := fiber.New()
+	app.Use(RateLimitWithConfig(RateLimitConfig{
+		GlobalRPS:   1,
+		GlobalBurst: 1,
+		GlobalKeyBy: "global",
+	}))
+	app.Get("/test", func(c fiber.Ctx) error {
+		return c.SendString("ok")
+	})
+
+	firstReq := httptest.NewRequest("GET", "/test", nil)
+	firstResp, err := app.Test(firstReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, firstResp.StatusCode)
+
+	secondReq := httptest.NewRequest("GET", "/test", nil)
+	secondResp, err := app.Test(secondReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 429, secondResp.StatusCode)
+}
+
+func TestRateLimitWithConfig_UserKey(t *testing.T) {
+	limitersMu.Lock()
+	limiters = make(map[string]*ratelimit.TokenBucket)
+	limitersMu.Unlock()
+
+	app := fiber.New()
+	app.Use(func(c fiber.Ctx) error {
+		c.Locals(UserIDCtxKey, "user-a")
+		return c.Next()
+	})
+	app.Use(RateLimitWithConfig(RateLimitConfig{
+		RouteID:    "/test",
+		RouteRPS:   1,
+		RouteBurst: 1,
+		RouteKeyBy: "user",
+	}))
+	app.Get("/test", func(c fiber.Ctx) error {
+		return c.SendString("ok")
+	})
+
+	firstReq := httptest.NewRequest("GET", "/test", nil)
+	firstResp, err := app.Test(firstReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, firstResp.StatusCode)
+
+	secondReq := httptest.NewRequest("GET", "/test", nil)
+	secondResp, err := app.Test(secondReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 429, secondResp.StatusCode)
+
+	thirdApp := fiber.New()
+	thirdApp.Use(func(c fiber.Ctx) error {
+		c.Locals(UserIDCtxKey, "user-b")
+		return c.Next()
+	})
+	thirdApp.Use(RateLimitWithConfig(RateLimitConfig{
+		RouteID:    "/test",
+		RouteRPS:   1,
+		RouteBurst: 1,
+		RouteKeyBy: "user",
+	}))
+	thirdApp.Get("/test", func(c fiber.Ctx) error {
+		return c.SendString("ok")
+	})
+
+	thirdReq := httptest.NewRequest("GET", "/test", nil)
+	thirdResp, err := thirdApp.Test(thirdReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, thirdResp.StatusCode)
 }
 
 func resetGlobalBreaker() {

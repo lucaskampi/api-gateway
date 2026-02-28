@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -45,13 +46,17 @@ func CORS(config CORSConfig) fiber.Handler {
 			}
 			c.Set("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))
 			c.Set("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
-			c.Set("Access-Control-Allow-Credentials", "false")
+			if config.AllowCredentials {
+				c.Set("Access-Control-Allow-Credentials", "true")
+			} else {
+				c.Set("Access-Control-Allow-Credentials", "false")
+			}
 
 			if len(config.ExposeHeaders) > 0 {
 				c.Set("Access-Control-Expose-Headers", strings.Join(config.ExposeHeaders, ", "))
 			}
 			if config.MaxAge > 0 {
-				c.Set("Access-Control-Max-Age", string(rune(config.MaxAge)))
+				c.Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
 			}
 		}
 
