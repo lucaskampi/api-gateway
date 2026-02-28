@@ -14,40 +14,12 @@ type RetryConfig struct {
 
 func Retry(cfg RetryConfig) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		upstream := c.Locals("upstream")
-		if upstream == nil {
-			return c.Next()
+		if cfg.Attempts > 0 {
+			c.Locals("retry_attempts", cfg.Attempts)
+			c.Locals("retry_backoff", cfg.Backoff)
+			c.Locals("retry_max_backoff", cfg.MaxBackoff)
 		}
 
-		var lastErr error
-		backoff := cfg.Backoff
-
-		for attempt := 0; attempt <= cfg.Attempts; attempt++ {
-			if attempt > 0 {
-				time.Sleep(backoff)
-				backoff = backoff * 2
-				if backoff > cfg.MaxBackoff {
-					backoff = cfg.MaxBackoff
-				}
-			}
-
-			lastErr = c.Next()
-			if lastErr == nil {
-				return nil
-			}
-
-			status := c.Response().StatusCode()
-			if status >= 200 && status < 500 {
-				return nil
-			}
-		}
-
-		if lastErr != nil {
-			return lastErr
-		}
-
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-			"error": "all retry attempts failed",
-		})
+		return c.Next()
 	}
 }

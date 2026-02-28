@@ -60,36 +60,53 @@ func (cb *CircuitBreaker) getCircuit(key string) *circuit {
 }
 
 func (cb *CircuitBreaker) Execute(key string, fn func() error) error {
+	if !cb.Allow(key) {
+		return fiber.ErrServiceUnavailable
+	}
+
+	err := fn()
+	cb.Record(key, err == nil)
+	return err
+}
+
+func (cb *CircuitBreaker) Allow(key string) bool {
 	circuit := cb.getCircuit(key)
 
 	circuit.mu.Lock()
 	defer circuit.mu.Unlock()
 
-	if circuit.state == circuitStateOpen {
-		if time.Since(circuit.lastFailure) > cb.backoff*time.Duration(cb.attempts) {
-			circuit.state = circuitStateHalfOpen
-		} else {
-			return fiber.ErrServiceUnavailable
-		}
+	if circuit.state != circuitStateOpen {
+		return true
 	}
 
-	err := fn()
+	if time.Since(circuit.lastFailure) > cb.backoff*time.Duration(cb.attempts) {
+		circuit.state = circuitStateHalfOpen
+		return true
+	}
 
-	if err != nil {
-		circuit.failures++
-		circuit.lastFailure = time.Now()
-		if circuit.failures >= cb.attempts {
-			circuit.state = circuitStateOpen
-		}
-	} else {
+	return false
+}
+
+func (cb *CircuitBreaker) Record(key string, success bool) {
+	circuit := cb.getCircuit(key)
+
+	circuit.mu.Lock()
+	defer circuit.mu.Unlock()
+
+	if success {
 		circuit.successes++
 		circuit.failures = 0
 		if circuit.state == circuitStateHalfOpen {
 			circuit.state = circuitStateClosed
 		}
+		return
 	}
 
-	return err
+	circuit.failures++
+	circuit.lastFailure = time.Now()
+	if circuit.failures >= cb.attempts {
+		circuit.state = circuitStateOpen
+	}
 }
 
 var globalCircuitBreaker *CircuitBreaker
@@ -110,16 +127,17 @@ func CircuitBreakerMiddleware(attempts int, backoff time.Duration) fiber.Handler
 			return c.Next()
 		}
 
-		err := globalCircuitBreaker.Execute(upstreamURL, func() error {
-			return c.Next()
-		})
-
-		if err != nil {
+		if !globalCircuitBreaker.Allow(upstreamURL) {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"error": "service temporarily unavailable",
 			})
 		}
 
-		return nil
+		err := c.Next()
+		status := c.Response().StatusCode()
+		success := err == nil && status < fiber.StatusInternalServerError
+		globalCircuitBreaker.Record(upstreamURL, success)
+
+		return err
 	}
 }

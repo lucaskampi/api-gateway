@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,17 +117,10 @@ func (c *HTTPClient) Forward(route struct {
 			})
 		}
 
-		body := ctx.Body()
-		req, err := http.NewRequestWithContext(ctx.Context(), ctx.Method(), target.String(), bytes.NewReader(body))
-		if err != nil {
-			return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-				"error": "failed to create request",
-			})
-		}
-
-		req.Header = make(http.Header)
+		body := append([]byte(nil), ctx.Body()...)
+		baseHeaders := make(http.Header)
 		ctx.Request().Header.VisitAll(func(key, value []byte) {
-			req.Header.Add(string(key), string(value))
+			baseHeaders.Add(string(key), string(value))
 		})
 
 		if route.Headers != nil {
@@ -134,40 +128,78 @@ func (c *HTTPClient) Forward(route struct {
 			userClaims := getUserClaims(ctx)
 			for k, v := range route.Headers {
 				v = strings.ReplaceAll(v, "{{.UserID}}", userID)
-				if userClaims != nil {
-					for claimKey, claimValue := range userClaims {
-						v = strings.ReplaceAll(v, "{{."+claimKey+"}}", toString(claimValue))
-					}
+				for claimKey, claimValue := range userClaims {
+					v = strings.ReplaceAll(v, "{{."+claimKey+"}}", toString(claimValue))
 				}
-				req.Header.Set(k, v)
+				baseHeaders.Set(k, v)
 			}
 		}
 
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-				"error": "failed to forward request",
-			})
+		attempts := 1
+		if v, ok := ctx.Locals("retry_attempts").(int); ok && v > 0 {
+			attempts = v + 1
 		}
-		defer resp.Body.Close()
 
-		ctx.Response().Reset()
-		ctx.Response().SetStatusCode(resp.StatusCode)
-		for k, v := range resp.Header {
-			if len(v) > 0 {
-				ctx.Response().Header.Set(k, v[0])
+		backoff, _ := ctx.Locals("retry_backoff").(time.Duration)
+		maxBackoff, ok := ctx.Locals("retry_max_backoff").(time.Duration)
+		if !ok || maxBackoff <= 0 {
+			maxBackoff = 5 * time.Second
+		}
+
+		timeout, _ := ctx.Locals("request_timeout").(time.Duration)
+
+		var lastErr error
+		for attempt := 0; attempt < attempts; attempt++ {
+			if attempt > 0 && backoff > 0 {
+				time.Sleep(backoff)
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
+
+			reqCtx := ctx.Context()
+			cancel := func() {}
+			if timeout > 0 {
+				reqCtxWithTimeout, cancelFunc := context.WithTimeout(reqCtx, timeout)
+				reqCtx = reqCtxWithTimeout
+				cancel = cancelFunc
+			}
+
+			req, err := http.NewRequestWithContext(reqCtx, ctx.Method(), target.String(), bytes.NewReader(body))
+			if err != nil {
+				cancel()
+				return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+					"error": "failed to create request",
+				})
+			}
+			req.Header = cloneHeaders(baseHeaders)
+
+			resp, err := c.client.Do(req)
+			cancel()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				lastErr = readErr
+				continue
+			}
+
+			if resp.StatusCode >= fiber.StatusInternalServerError && attempt < attempts-1 {
+				continue
+			}
+
+			return writeResponse(ctx, resp.StatusCode, resp.Header, bodyBytes)
 		}
 
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-				"error": "failed to read response body",
-			})
-		}
-
-		_, err = ctx.Response().BodyWriter().Write(bodyBytes)
-		return err
+		return ctx.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+			"error":   "failed to forward request",
+			"details": errorMessage(lastErr),
+		})
 	}
 }
 
@@ -199,18 +231,48 @@ func toString(v interface{}) string {
 	if v == nil {
 		return ""
 	}
-	return strings.Trim(strings.ReplaceAll(toStringRecursive(v), `"`, ""), `"`)
-}
 
-func toStringRecursive(v interface{}) string {
 	switch val := v.(type) {
 	case string:
 		return val
 	case float64:
-		return string(rune(int(val)))
+		if val == float64(int64(val)) {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64)
 	case int:
-		return string(rune(val))
+		return strconv.Itoa(val)
 	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func cloneHeaders(source http.Header) http.Header {
+	target := make(http.Header, len(source))
+	for key, values := range source {
+		for _, value := range values {
+			target.Add(key, value)
+		}
+	}
+	return target
+}
+
+func writeResponse(ctx fiber.Ctx, status int, headers http.Header, body []byte) error {
+	ctx.Response().Reset()
+	ctx.Response().SetStatusCode(status)
+	for key, values := range headers {
+		if len(values) > 0 {
+			ctx.Response().Header.Set(key, values[0])
+		}
+	}
+
+	_, err := ctx.Response().BodyWriter().Write(body)
+	return err
+}
+
+func errorMessage(err error) string {
+	if err == nil {
 		return ""
 	}
+	return err.Error()
 }
